@@ -12,6 +12,7 @@ require(lavaan)
 require(stringr)
 require(scales)
 require(haven)
+require(dplyr)
 
 ## A. Set up folder directories
 
@@ -25,6 +26,16 @@ data <- as.data.frame(read_dta(file.path(data.folder,"BurnTemp.dta")))
 
 data[,c("input_day_c", "overwhelmed","detached","drained","sluggish", "temperature")] <- 
   lapply(data[,c("input_day_c", "overwhelmed","detached","drained","sluggish", "temperature")], as.numeric)
+
+max_day <- max(data$input_day_c, na.rm =TRUE)
+
+### Importing new data so model is set for previous round of data but predicted on future values
+
+data.update <- as.data.frame(read_dta(file.path(data.folder,"BurnTemp_march2024.dta")))
+
+data.update[,c("input_day_c", "overwhelmed","detached","drained","sluggish", "temperature")] <- 
+  lapply(data.update[,c("input_day_c", "overwhelmed","detached","drained","sluggish", "temperature")], as.numeric)
+
 
 ### Creates a key to connect the panel and userids and outputs to file. 
 
@@ -73,7 +84,6 @@ drags <- c("liwc__cognitive_processes",
 data[,c(drives,drags)] <- 
   lapply(data[,c(drives, drags)], as.numeric)
 
-
 ### Items to rescale
 
 rescale <- c("salleegratitude",
@@ -104,6 +114,10 @@ for(col in rescale){
   std <- sd(data[,col], na.rm = TRUE)
   data[,col] = (data[,col] - avg) / std
 
+  avg <- mean(data.update[,col], na.rm =TRUE)
+  std <- sd(data.update[,col], na.rm = TRUE)
+  data.update[,col] = (data.update[,col] - avg) / std
+  
 }
 
 ### Rescale z-scores to be between 0 and 100. 
@@ -111,8 +125,13 @@ for(col in rescale){
 for(col in rescale){
   
   data[ ,col] <- rescale(data[ ,col], to = c(0,100))  
+  data.update[ ,col] <- rescale(data.update[ ,col], to = c(0,100))  
   
 }
+
+## Split data set into old model, for use in CFA specification and subsequent predictions
+
+new_data <- data.update[data.update$input_day_c > max_day,]
 
 ## 4. Develop BPI measurement model and add BPI measures to data frame. 
 
@@ -126,7 +145,8 @@ drives.model <-'drives.latent =~ salleegratitude + personality__extraversion + p
 fit <- cfa(drives.model, 
            data = data,
            ordered = FALSE,
-           std.lv = TRUE)
+           std.lv = TRUE,
+           missing = "FIML")
 
 summary(fit)
 
@@ -135,8 +155,8 @@ summary(fit)
 scores <- lavPredict(fit, 
                      method = "ml", 
                      type = "lv", 
-                     newdata = data, 
-                     append.data = TRUE) 
+                     newdata = data.update, 
+                     append.data = FALSE) 
 
 scores <- as.data.frame(scores)
 
@@ -153,16 +173,7 @@ scores$drives.latent <- rescale(scores$drives.latent, to = c(0,100))
 
 ### Merge the data set in with the 
 
-len <- length(data$input_day_c)
-na_rows <- sum(is.na(data$detached))
-
-new_rows <- as.data.frame(matrix(NA, nrow = na_rows , ncol = ncol(scores)))
-
-colnames(new_rows) <- c(colnames(scores))
-
-scores <- rbind(scores, new_rows)
-
-data <- cbind(data, scores)
+data.update <- cbind(data.update, scores)
 
 ## 5. Develop Empathy Capacity measurement model. 
 
@@ -172,13 +183,14 @@ empathy.model <-'empathy.capacity =~ personality__empathetic + liwc_extension__h
 fit <- cfa(empathy.model, 
            data = data,
            std.lv = TRUE,
-           ordered = FALSE)
+           ordered = FALSE,
+           missing = "FIML")
 
 scores <- lavPredict(fit, 
                      method = "ml", 
                      type = "lv", 
-                     newdata = data, 
-                     append.data = TRUE)
+                     newdata = data.update, 
+                     append.data = FALSE)
 
 scores <- as.data.frame(scores)
 
@@ -186,17 +198,7 @@ scores$empathy.capacity <- rescale(scores$empathy.capacity, to = c(0,100))
 
 ### Merge the data set.
 
-len <- length(data$input_day_c)
-na_rows <- sum(is.na(data$personality__empathetic))
-
-new_rows <- as.data.frame(matrix(NA, nrow = na_rows , ncol = ncol(scores)))
-
-colnames(new_rows) <- c(colnames(scores))
-
-scores <- rbind(scores, new_rows)
-
-data <- cbind(data, scores)
-
+data.update <- cbind(data.update, scores)
 
 ## 6. Develop Empathy Capacity measurement model. 
 
@@ -207,13 +209,14 @@ anxiety.model <-'anxiety.blend =~ personality__neuroticism +
 fit <- cfa(anxiety.model, 
            data = data,
            std.lv = TRUE,
-           ordered = FALSE)
+           ordered = FALSE,
+           missing = "FIML")
 
 scores <- lavPredict(fit, 
                      method = "ml", 
                      type = "lv", 
-                     newdata = data, 
-                     append.data = TRUE)
+                     newdata = data.update, 
+                     append.data = FALSE)
 
 scores <- as.data.frame(scores)
 
@@ -221,21 +224,16 @@ scores$anxiety.blend <- rescale(scores$anxiety.blend, to = c(0,100))
 
 ### Merge the data set.
 
-len <- length(data$input_day_c)
-na_rows <- sum(is.na(data$personality__neuroticism))
-
-new_rows <- as.data.frame(matrix(NA, nrow = na_rows , ncol = ncol(scores)))
-
-colnames(new_rows) <- c(colnames(scores))
-
-scores <- rbind(scores, new_rows)
-
-data <- cbind(data, scores)
+data.update <- cbind(data.update, scores)
 
 ## Clear up the environment.
 rm(fit)
 rm(new_rows)
+rm(new_data)
+rm(data)
 rm(scores)
+
+data <- data.update
 
 ## 7. Update timestamp.
 
